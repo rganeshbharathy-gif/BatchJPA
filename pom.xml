@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- ═══════════════════════════  Parent BOM  ═══════════════════════════ -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.3.4</version>
+        <relativePath/>
+    </parent>
+
+    <!-- ═══════════════════════  Project coordinates  ══════════════════════ -->
+    <groupId>com.example</groupId>
+    <artifactId>batch-jpa</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+    <name>BatchJPA</name>
+    <description>Spring Batch 5 – flat-file → Oracle JPA upsert with dynamic columns</description>
+
+    <!-- ═══════════════════════════  Properties  ═══════════════════════════ -->
+    <properties>
+        <!-- Java 25 (preview features exposed via compiler args below) -->
+        <java.version>25</java.version>
+        <maven.compiler.release>25</maven.compiler.release>
+        <!-- Hibernate 6 – already managed by Boot 3.3; explicit for clarity -->
+        <hibernate.version>6.5.2.Final</hibernate.version>
+        <!-- Oracle JDBC driver version -->
+        <ojdbc.version>23.5.0.24.07</ojdbc.version>
+    </properties>
+
+    <!-- ═══════════════════════════  Dependencies  ══════════════════════════ -->
+    <dependencies>
+
+        <!-- Spring Boot starters -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-batch</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!--
+          Oracle JDBC (thin driver, JDK 11+ compatible).
+          ojdbc11 is NOT in Maven Central; it is available from:
+            https://maven.oracle.com/  (requires free Oracle account)
+          OR add it to your local/corporate Nexus repository.
+          The version below is the latest GA at time of writing.
+        -->
+        <dependency>
+            <groupId>com.oracle.database.jdbc</groupId>
+            <artifactId>ojdbc11</artifactId>
+            <version>${ojdbc.version}</version>
+        </dependency>
+
+        <!-- Oracle UCP – optional but improves connection pool behaviour -->
+        <dependency>
+            <groupId>com.oracle.database.jdbc</groupId>
+            <artifactId>ucp</artifactId>
+            <version>${ojdbc.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- ─── Test scope ─── -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.batch</groupId>
+            <artifactId>spring-batch-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- H2 in-memory DB for unit tests that do not require Oracle -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <!-- ══════════════════════════════  Build  ══════════════════════════════ -->
+    <build>
+        <plugins>
+
+            <!-- Repackage into a fat JAR -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+
+            <!--
+              Compiler – Java 25 with --enable-preview so that any preview
+              feature (e.g. primitive patterns) compiles correctly.
+              Records and text blocks are stable in Java 25 but --enable-preview
+              is kept to allow future use without further config changes.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <release>25</release>
+                    <compilerArgs>
+                        <arg>--enable-preview</arg>
+                    </compilerArgs>
+                    <!-- Preserve method parameter names for Spring @Value injection -->
+                    <parameters>true</parameters>
+                </configuration>
+            </plugin>
+
+            <!-- Surefire – also needs --enable-preview at test runtime -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>--enable-preview</argLine>
+                </configuration>
+            </plugin>
+
+        </plugins>
+    </build>
+
+</project>
