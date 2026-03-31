@@ -26,6 +26,8 @@ import org.springframework.core.io.FileSystemResource;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -90,22 +92,44 @@ public class BatchConfig {
     // =========================================================================
 
     /**
-     * Builds a {@link FlatFileItemReader} that:
+     * Builds a {@link FlatFileItemReader} that reads only the 4 target columns
+     * from a wide (e.g. 150-column) pipe-delimited flat file.
+     *
+     * <h3>How column-index discovery works</h3>
+     * <ol>
+     *   <li>Split the raw {@code headerLine} (saved by {@link com.example.batchjpa.tasklet.FileValidationTasklet})
+     *       on the delimiter to get all column names with their positions
+     *       ({@code allColumnNames[i]} is at index {@code i}).</li>
+     *   <li>Build a {@code name → index} lookup map from that array.</li>
+     *   <li>For each name in {@code batch.file.target.columns}, look up its
+     *       position.  Throw {@link IllegalStateException} if a required column
+     *       is absent so the job fails fast in Step 1 with a clear message.</li>
+     *   <li>Pass only the 4 target names + their source indexes to
+     *       {@link DynamicLineMapper}.  Every data line is then split once into
+     *       tokens and the mapper jumps straight to each required index —
+     *       the other 146 values are never touched.</li>
+     * </ol>
+     *
+     * <pre>
+     * Header (150 cols): ...| CSI-ID |...| Grid id |...| eco sector code |...| country code |...
+     *                           ↑ idx 7       ↑ idx 23         ↑ idx 51            ↑ idx 88
+     *
+     * columnNames   = ["CSI-ID",  "Grid id",  "eco sector code",  "country code"]
+     * columnIndexes = [        7,          23,                51,              88]
+     * </pre>
+     *
+     * <h3>Reader configuration</h3>
      * <ul>
-     *   <li>Opens the file at {@code file.path} (from job parameters).</li>
-     *   <li>Skips line 1 (the header – column names were already captured by the
-     *       tasklet).</li>
-     *   <li>Sets {@code maxItemCount} to {@code dataLineCount} so the reader
-     *       stops exactly before the footer line without reading it as a data
-     *       row.</li>
-     *   <li>Uses a {@link DynamicLineMapper} constructed from the raw
-     *       {@code headerLine} stored in the {@code JobExecutionContext}.</li>
+     *   <li>{@code linesToSkip(1)} – skips the header line (already consumed by the tasklet).</li>
+     *   <li>{@code maxItemCount(dataLineCount)} – stops the reader exactly before the footer
+     *       line so it is never read as a data row.</li>
      * </ul>
      *
-     * @param filePath      resolved from job parameter {@code file.path}
-     * @param dataLineCount number of data rows, from {@code jobExecutionContext['dataLineCount']}
-     * @param headerLine    raw header line text, from {@code jobExecutionContext['headerLine']}
-     * @param delimiter     field separator, from application property {@code batch.file.delimiter}
+     * @param filePath           resolved from job parameter {@code file.path}
+     * @param dataLineCount      data-row count, from {@code jobExecutionContext['dataLineCount']}
+     * @param headerLine         raw header text, from {@code jobExecutionContext['headerLine']}
+     * @param delimiter          field separator, from {@code batch.file.delimiter}
+     * @param targetColumnsConfig comma-separated target column names, from {@code batch.file.target.columns}
      * @return a fully configured {@link FlatFileItemReader}
      */
     @Bean
@@ -114,25 +138,44 @@ public class BatchConfig {
             @Value("#{jobParameters['file.path']}")          String filePath,
             @Value("#{jobExecutionContext['dataLineCount']}") Long   dataLineCount,
             @Value("#{jobExecutionContext['headerLine']}")    String headerLine,
-            @Value("${batch.file.delimiter:|}")               String delimiter) {
+            @Value("${batch.file.delimiter:|}")               String delimiter,
+            @Value("${batch.file.target.columns}")            String targetColumnsConfig) {
 
-        // Parse column names from the header line stored by FileValidationTasklet
-        String[] columnNames = headerLine.split(Pattern.quote(delimiter), -1);
-
-        // Trim any surrounding whitespace from each column name
-        for (int i = 0; i < columnNames.length; i++) {
-            columnNames[i] = columnNames[i].strip();
+        // ── Step 1: build index map for ALL columns in the file header ────────
+        // e.g. {"col0"→0, "col1"→1, ..., "CSI-ID"→7, ..., "Grid id"→23, ...}
+        String[] allColumnNames = headerLine.split(Pattern.quote(delimiter), -1);
+        Map<String, Integer> headerIndexMap = new LinkedHashMap<>(allColumnNames.length);
+        for (int i = 0; i < allColumnNames.length; i++) {
+            headerIndexMap.put(allColumnNames[i].strip(), i);
         }
 
-        DynamicLineMapper lineMapper = new DynamicLineMapper(columnNames, delimiter);
+        // ── Step 2: find the source index of each required target column ──────
+        // Configured via batch.file.target.columns=CSI-ID,Grid id,eco sector code,country code
+        String[] targetNames   = targetColumnsConfig.split(",", -1);
+        int[]    targetIndexes = new int[targetNames.length];
+
+        for (int i = 0; i < targetNames.length; i++) {
+            String col = targetNames[i].strip();
+            Integer idx = headerIndexMap.get(col);
+            if (idx == null) {
+                throw new IllegalStateException(
+                        ("Required column '%s' not found in file header. "
+                         + "Available columns (%d): %s")
+                                .formatted(col, allColumnNames.length, headerIndexMap.keySet()));
+            }
+            targetNames[i]   = col;   // store trimmed name
+            targetIndexes[i] = idx;   // store its position in the 150-column line
+        }
+
+        // ── Step 3: build the mapper with only the 4 target names + indexes ───
+        // mapLine() will call tokens[targetIndexes[i]] instead of tokens[i]
+        DynamicLineMapper lineMapper = new DynamicLineMapper(targetNames, targetIndexes, delimiter);
 
         return new FlatFileItemReaderBuilder<DynamicDataRecord>()
                 .name("dynamicFlatFileItemReader")
                 .resource(new FileSystemResource(filePath))
-                // Skip line 1: header was already consumed by the tasklet
-                .linesToSkip(1)
-                // Stop reading before the footer line
-                .maxItemCount(dataLineCount.intValue())
+                .linesToSkip(1)                        // skip header (already stored in jobExecutionContext)
+                .maxItemCount(dataLineCount.intValue()) // stop before the footer line
                 .lineMapper(lineMapper)
                 .build();
     }
