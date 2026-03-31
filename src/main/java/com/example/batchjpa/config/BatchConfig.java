@@ -6,6 +6,7 @@ import com.example.batchjpa.model.DynamicDataRecord;
 import com.example.batchjpa.processor.DynamicDataRecordProcessor;
 import com.example.batchjpa.reader.DynamicLineMapper;
 import com.example.batchjpa.tasklet.FileValidationTasklet;
+import com.example.batchjpa.writer.EntityManagerMergeWriter;
 
 import jakarta.persistence.EntityManagerFactory;
 
@@ -194,7 +195,11 @@ public class BatchConfig {
      *
      * <p>Reads up to {@code dataLineCount} lines from the file, processes each
      * through {@link DynamicDataRecordProcessor}, and writes batches of
-     * {@code chunkSize} records via {@link JpaItemWriter}.
+     * {@code chunkSize} records via {@link EntityManagerMergeWriter} (Approach 2).
+     *
+     * <p><strong>Switching writers:</strong> To revert to Approach 1 ({@link JpaItemWriter}),
+     * change the {@code writer} parameter type back to {@code JpaItemWriter<DataRecord>}.
+     * The {@code itemWriter()} bean below remains available for that purpose.
      *
      * <p>The {@link RowCountValidationListener} runs after the step completes as
      * a secondary safety net.
@@ -203,7 +208,7 @@ public class BatchConfig {
      * @param transactionManager  the {@link JpaTransactionManager} defined above
      * @param reader              the {@code @StepScope} flat-file reader
      * @param processor           the DTO-to-entity processor
-     * @param writer              the JPA writer
+     * @param writer              Approach 2: custom EM writer (swap to {@code JpaItemWriter<DataRecord>} for Approach 1)
      * @param listener            the post-step row-count validator
      * @param chunkSize           from application property {@code batch.chunk.size} (default 500)
      * @return the configured data-load step
@@ -214,7 +219,7 @@ public class BatchConfig {
             PlatformTransactionManager transactionManager,
             FlatFileItemReader<DynamicDataRecord> reader,
             DynamicDataRecordProcessor processor,
-            JpaItemWriter<DataRecord> writer,
+            EntityManagerMergeWriter writer,           // Approach 2 — swap to JpaItemWriter<DataRecord> for Approach 1
             RowCountValidationListener listener,
             @Value("${batch.chunk.size:500}") int chunkSize) {
 
